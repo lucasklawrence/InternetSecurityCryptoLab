@@ -1,0 +1,4 @@
+this is the file that i am going to encrypt
+multiple lines to make sure works for multiple blocks
+abcdefghijklmnopqrstuvwxyz
+the quick brown fox jumped over the lazy dog

@@ -1,0 +1,291 @@
+import os
+import base64
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.backends import default_backend
+from encodings.base64_codec import base64_encode
+
+blocksize = 16
+backend = default_backend()
+salt = os.urandom(16)
+
+kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=blocksize,
+        salt=salt,
+        iterations=100000,
+        backend=backend)
+
+idf = PBKDF2HMAC(
+    algorithm=hashes.SHA256(),
+    length=16,
+    salt=salt,
+    iterations=100000,
+    backend=backend)
+
+def decryption():
+    input_file_name = select_file(encrypt=0)
+
+    mode_selection = choose_mode()
+
+    output_file_name = input("Enter a filename to output the decrypted file to: ")
+
+    # get key and iv used for encryption
+
+    prefix_input_file = input_file_name.split('.')[0]
+    #output_file_key = output_file_name.split('.')
+    output_key_file = prefix_input_file + ".key"
+    key_file = open(output_key_file, "rb")
+
+    key = bytearray(blocksize)
+    key_file.readinto(key)
+
+    output_file_iv = output_file_name.split('.')
+    output_iv_file = prefix_input_file + ".iv"
+
+    iv_file = open(output_iv_file, "rb")
+    iv = bytearray(blocksize)
+    iv_file.readinto(iv)
+
+    print("key", key)
+    print("iv", iv)
+
+    input_file = open(input_file_name, "rb")
+    output_file = open(output_file_name, "wb")
+
+    # create a mutable array to hold the bytes
+    data = bytearray(blocksize)
+    totalsize = 0
+
+    cipher = create_cipher(mode_selection, bytes(key), bytes(iv))
+    decryptor = cipher.decryptor()
+
+    while True:
+        # read block from source file
+        num = input_file.readinto(data)
+        # adjust totalsize
+        totalsize += num
+        # print data, assuming text data
+        print("size of input data", num)
+
+        # check if full block read
+        if num == blocksize:
+            plaintext = decryptor.update(bytes(data))
+            # write full block to destination
+            print("plaintext", plaintext.hex())
+            last_bytes = plaintext.hex()[-2:]
+            num_padding_bytes = int(last_bytes, 16)
+            print("num padding bytes", num_padding_bytes)
+
+            # make sure block is padded correctly when we depad
+            valid = 0
+            if num_padding_bytes <= 16:
+                valid = 1
+                left = -4
+                for i in range(num_padding_bytes - 1):
+                    if num_padding_bytes != int(plaintext.hex()[left:left + 2], 16):
+                        valid = 0
+                    left = left - 2
+            if valid:
+                unpadder = padding.PKCS7(128).unpadder()
+                unpadded_data = unpadder.update(plaintext) + unpadder.finalize()
+                print("unpadded data", unpadded_data)
+                plaintext = decryptor.finalize()
+                output_file.write(unpadded_data)
+                break
+            output_file.write(plaintext)
+        """
+        else:
+            unpadder = padding.PKCS7(128).unpadder()
+            plaintext = decryptor.finalize()
+            print("plaintext is", plaintext.hex())
+            unpadded_data = unpadder.update(plaintext) + unpadder.finalize()
+            # write subarray to destination and break loop
+            output_file.write(unpadded_data)
+            break
+        """
+
+
+def encryption():
+
+    input_file_name = select_file(encrypt=1)
+
+    mode_selection = choose_mode()
+
+    output_file_name_pre = input("Enter a filename to output the encrypted file to (will add a .txt extension): ")
+    output_file_name = output_file_name_pre + ".txt"
+
+    key_password = input("Input a password to be used as a seed in the Key Derivation Function: ")
+    key = kdf.derive(bytes(key_password, encoding='utf-8'))
+
+    output_file_key = output_file_name_pre + ".key"
+    write_to_key = open(output_file_key, "wb")
+    write_to_key.write(key)
+
+    print("key is ", key)
+    iv_password = input("Input a password to be used to create the IV: ")
+    iv = idf.derive(bytes(iv_password, encoding='utf-8'))
+    print("iv is ", iv)
+
+    output_file_iv = output_file_name_pre + ".iv"
+    write_to_iv = open(output_file_iv, "wb")
+    write_to_iv.write(iv)
+
+    input_file = open(input_file_name, "rb")
+    output_file = open(output_file_name, "wb")
+
+    # create a mutable array to hold the bytes
+    data = bytearray(blocksize)
+    totalsize = 0
+
+    cipher = create_cipher(mode_selection, key, iv)
+    encryptor = cipher.encryptor()
+    while True:
+        # read block from source file
+        num = input_file.readinto(data)
+        # adjust totalsize
+        totalsize += num
+        # print data, assuming text data
+        """
+        print("size of input data", num, "input data", data)
+        """
+
+        # check if full block read
+        if num == blocksize:
+            ciphertext = encryptor.update(bytes(data))
+            # write full block to destination
+            output_file.write(ciphertext)
+        else:
+            padder = padding.PKCS7(128).padder()
+            print("type of data", type(data))
+            padded_data = padder.update(bytes(data[0:num])) + padder.finalize()
+            ciphertext = encryptor.update(bytes(padded_data)) + encryptor.finalize()
+
+            # write subarray to destination and break loop
+            output_file.write(ciphertext)
+            break
+
+def select_file(encrypt):
+    string_to_add = "decrypt"
+    if encrypt:
+        string_to_add = "encrypt"
+
+    files = os.listdir()
+    choice = 1
+    for file in files:
+        print(str(choice) + ": " + file)
+        choice = choice + 1
+
+    query = "Select a file to " + string_to_add + ": "
+    file_selection = input(query)
+
+    while not str.isdigit(file_selection) or int(file_selection) > choice:
+        print("Input was not one of the valid choices")
+        file_selection = input("Select a file to encrypt: ")
+    return files[int(file_selection) - 1]
+
+def choose_mode():
+    print("1: CBC")
+    print("2: ECB")
+    print("3: Counter")
+    print("4: CFB")
+    print("5: OFB")
+
+    mode_selection = input("Select a mode of encryption: ")
+    while not str.isdigit(mode_selection) or int(mode_selection) > 5:
+        print("Input was not one of the valid choices")
+        mode_selection = input("Select a mode of encryption: ")
+
+    return mode_selection
+
+
+def create_cipher(mode_selection, key, iv):
+    if mode_selection == "1":
+        cipher = Cipher(
+            algorithm=algorithms.AES(key),
+            mode=modes.CBC(iv),
+            backend=backend)
+    elif mode_selection == "2":
+        cipher = Cipher(
+            algorithm=algorithms.AES(key),
+            mode=modes.ECB(),
+            backend=backend)
+    elif mode_selection == "3":
+        cipher = Cipher(
+            algorithm=algorithms.AES(key),
+            mode=modes.CTR(iv),
+            backend=backend)
+    elif mode_selection == "4":
+        cipher = Cipher(
+            algorithm=algorithms.AES(key),
+            mode=modes.OFB(iv),
+            backend=backend)
+    elif mode_selection == "5":
+        cipher = Cipher(
+            algorithm=algorithms.AES(key),
+            mode=modes.CFB(iv),
+            backend=backend)
+    return cipher
+
+print("Do you want to encrypt or decrypt a file?")
+print("1: Encrypt")
+print("2: Decrypt")
+
+user_input = input("Enter Choice: ")
+
+if user_input == '1' or user_input.lower() == 'encrypt':
+    print("chose encryption")
+    encryption()
+elif user_input == '2' or user_input.lower() == 'decrypt':
+    print("chose decryption")
+    decryption()
+
+
+
+
+#####
+# 2.1
+#####
+"""
+backend = default_backend()
+salt = os.urandom(16)
+print("salt", salt.hex())
+
+passwd = b'password'
+ivval = b'hello'
+
+key = kdf.derive(passwd)
+iv = idf.derive(ivval)
+
+print("key", key.hex())
+print("iv", iv.hex())
+
+#####
+# 2.2
+#####
+cipher = Cipher(
+ algorithm=algorithms.AES(key),
+ #mode=modes.CBC(iv),
+ mode=modes.ECB(),
+ backend=backend)
+encryptor = cipher.encryptor()
+
+#mydata = b'this is my long data for this task to ensure that multiple blocks are processed during the cipher'
+#print("my data", mydata)
+#print("my data hex", mydata.hex())
+
+padder = padding.PKCS7(128).padder()
+mydata = b'1234567812345678'
+mydata_pad = padder.update(mydata) + padder.finalize()
+print("padded data", mydata_pad.hex())
+ciphertext = encryptor.update(mydata_pad) + encryptor.finalize()
+#ciphertext = encryptor.update(mydata) + encryptor.finalize()
+print("ciphertext", ciphertext.hex())
+
+decryptor = cipher.decryptor()
+plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+print("plaintext", plaintext.hex())
+"""
+
